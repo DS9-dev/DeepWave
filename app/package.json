@@ -1,0 +1,62 @@
+{
+  "name": "deepwave",
+  "productName": "DeepWave",
+  "version": "1.1.0",
+  "description": "DeepWave — неофициальный настольный клиент Яндекс Музыки для широкого случайного прослушивания каталога",
+  "private": true,
+  "main": "dist/main/main.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node build.mjs && electron .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dist": "node build.mjs --prod && electron-builder --win dir"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.2.5",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.5",
+    "typescript": "^5.8.3"
+  },
+  "build": {
+    "appId": "app.deepwave.player",
+    "productName": "DeepWave",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/root.json",
+        "to": "root.json"
+      }
+    ],
+    "win": {
+      "target": "dir",
+      "icon": "build/icon.png",
+      "executableName": "DeepWave"
+    },
+    "asar": true,
+    "electronLanguages": [
+      "ru",
+      "en-US"
+    ]
+  },
+  "license": "MIT",
+  "author": "DS9-dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DS9-dev/DeepWave.git"
+  }
+}

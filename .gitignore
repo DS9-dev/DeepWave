@@ -1,0 +1,40 @@
+# --- Личные данные: никогда не публикуются ---
+# музыкальные каталоги SQLite, история, настройки, журналы сервиса
+catalog/
+*.sqlite
+*.sqlite-*
+*.db
+*.lock
+# токены и секреты
+.yandex_music_token*
+*.dpapi
+.env
+.env.*
+# результаты исследований (содержат данные аккаунта)
+results/
+results_depth/
+results_play/
+*.log
+# аудио
+*.mp3
+*.flac
+*.m4a
+*.aac
+*.ogg
+
+# --- Сборка и зависимости ---
+app/node_modules/
+app/dist/
+app/release/
+# абсолютный путь к папке проекта на конкретном компьютере
+app/build/root.json
+__pycache__/
+*.py[cod]
+
+# --- Прочее ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak

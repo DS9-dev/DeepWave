@@ -1,0 +1,80 @@
+name: Windows build & smoke test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Python dependencies
+        run: python -m pip install yandex-music
+
+      - name: npm ci
+        working-directory: app
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: app
+        run: npm run typecheck
+
+      - name: Build DeepWave.exe
+        working-directory: app
+        run: npm run dist
+
+      - name: Smoke test — запуск DeepWave.exe, полный и компактный режим, закрытие
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP "smoke"
+          $exe = Resolve-Path "app\release\win-unpacked\DeepWave.exe"
+          $p = Start-Process -FilePath $exe -ArgumentList "--smoke-test=$out" -PassThru
+          if (-not $p.WaitForExit(150000)) { Stop-Process -Id $p.Id -Force; throw "DeepWave не завершил самопроверку за 150 с" }
+          Get-Content "$out\result.json"
+          $r = Get-Content "$out\result.json" -Raw | ConvertFrom-Json
+          Start-Sleep -Seconds 3
+          $left = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*backend*server.py*" }
+          if ($left) { $left | Format-List ProcessId, CommandLine; throw "Python-сервис не закрылся вместе с приложением" }
+          if (-not $r.ok) { throw "Самопроверка не прошла: $($r.reason)" }
+          Write-Host "OK: окно, сервис и оба режима работают; сервис закрыт вместе с приложением"
+
+      - name: Crash test — сервис закрывается, если DeepWave завершён аварийно
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "app\release\win-unpacked\DeepWave.exe"
+          Start-Process -FilePath $exe | Out-Null
+          $deadline = (Get-Date).AddSeconds(60)
+          do { Start-Sleep -Seconds 2; $svc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*backend*server.py*" } } until ($svc -or (Get-Date) -gt $deadline)
+          if (-not $svc) { throw "Python-сервис не запустился" }
+          Write-Host "Сервис запущен: PID $($svc.ProcessId). Аварийно завершаю DeepWave.exe…"
+          Get-Process DeepWave -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 10
+          $left = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*backend*server.py*" }
+          if ($left) { $left | Format-List ProcessId, CommandLine; throw "Сервис остался после аварийного завершения" }
+          Write-Host "OK: сервис закрылся сам"
+
+      - name: Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-screenshots
+          path: ${{ runner.temp }}/smoke/
+          retention-days: 7
