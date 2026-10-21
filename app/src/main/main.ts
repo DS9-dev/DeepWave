@@ -1,9 +1,9 @@
 // DeepWave — главный процесс Electron: окно без системной рамки (обычный и компактный режим)
 // и локальный Python-сервис, который живёт ровно столько, сколько приложение.
-import { app, BrowserWindow, ipcMain, nativeTheme, screen, shell, dialog } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme, screen, session, shell, dialog } from "electron";
 import { spawn, spawnSync, ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 type Bounds = { x?: number; y?: number; width: number; height: number };
@@ -20,6 +20,14 @@ const logPath = join(userDir, "backend.log");
 // перенос настроек окна из прежнего названия приложения (Music App)
 const legacyConfig = join(app.getPath("appData"), "Music App", "config.json");
 if (!existsSync(configPath) && existsSync(legacyConfig)) { try { copyFileSync(legacyConfig, configPath); } catch { /* ignore */ } }
+
+// Кеш Chromium (обложки и фото исполнителей) ограничен: старые данные вытесняются автоматически, недавние остаются.
+const HTTP_CACHE_LIMIT = 256 * 1024 * 1024;
+app.commandLine.appendSwitch("disk-cache-size", String(HTTP_CACHE_LIMIT));
+// Журнал сервиса: не больше ~2 МБ (текущий файл + один предыдущий)
+const LOG_LIMIT = 1024 * 1024;
+const fileSize = (p: string) => { try { return statSync(p).size; } catch { return 0; } };
+if (fileSize(logPath) > LOG_LIMIT) { try { renameSync(logPath, `${logPath}.1`); } catch { /* ignore */ } }
 
 const readConfig = (): Config => { try { return JSON.parse(readFileSync(configPath, "utf-8")); } catch { return {}; } };
 const writeConfig = (patch: Partial<Config>) => { try { writeFileSync(configPath, JSON.stringify({ ...readConfig(), ...patch }, null, 2)); } catch { /* ignore */ } };
@@ -232,6 +240,17 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle("open-external", (_e, url: string) => { if (/^https:\/\//.test(url)) shell.openExternal(url); });
     ipcMain.handle("show-log", () => shell.showItemInFolder(logPath));
     ipcMain.handle("smoke:enabled", () => !!smokeDir);
+    ipcMain.handle("cache:info", async () => ({
+      httpBytes: await session.defaultSession.getCacheSize(), httpLimit: HTTP_CACHE_LIMIT,
+      logBytes: fileSize(logPath) + fileSize(`${logPath}.1`),
+    }));
+    // «Очистить кеш»: только HTTP-кеш и кеш кода Chromium — воспроизведение (поток с локального сервиса не кешируется),
+    // вход, настройки, история и каталоги не затрагиваются
+    ipcMain.handle("cache:clear", async () => {
+      await session.defaultSession.clearCache();
+      try { await session.defaultSession.clearCodeCaches({}); } catch { /* ignore */ }
+      return { httpBytes: await session.defaultSession.getCacheSize(), httpLimit: HTTP_CACHE_LIMIT, logBytes: fileSize(logPath) + fileSize(`${logPath}.1`) };
+    });
     createWindow();
     if (smokeDir) smokeTest();
     await startBackend();

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, bridge, num } from "../../api";
+import { api, bridge, CacheInfo, num, Storage } from "../../api";
 import { useApp } from "../App";
 import { Segmented, Toggle } from "../common";
 
@@ -8,6 +8,49 @@ type Countries = { running: boolean; done?: number; todo?: number; artists: numb
 
 function Row({ title, hint, children }: { title: string; hint?: React.ReactNode; children: React.ReactNode }) {
   return <div className="setting"><div><div className="setting-title">{title}</div>{hint && <div className="setting-hint">{hint}</div>}</div><div className="setting-ctl">{children}</div></div>;
+}
+
+const mb = (b: number) => (b >= 1e6 ? `${(b / 1048576).toFixed(b >= 1e8 ? 0 : 1)} МБ` : `${Math.max(1, Math.round(b / 1024))} КБ`);
+const date = (t: number) => new Date(t * 1000).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+
+function StorageSection({ months, onMonths }: { months: number; onMonths: (m: number) => void }) {
+  const [s, setS] = useState<Storage | null>(null);
+  const [cache, setCache] = useState<CacheInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState("");
+  const load = () => {
+    api.get<Storage>("/api/storage").then(setS).catch(() => {});
+    bridge?.cache.info().then(setCache).catch(() => {});
+  };
+  useEffect(load, [months]);
+  const clear = async () => {
+    setBusy(true); setDone("");
+    try {
+      const [st, c] = await Promise.all([api.post<Storage>("/api/storage/clear-cache"), bridge ? bridge.cache.clear() : Promise.resolve(null)]);
+      setS(st); if (c) setCache(c);
+      setDone("Кеш очищен");
+    } finally { setBusy(false); }
+  };
+  const cacheBytes = (cache?.httpBytes ?? 0);
+  return (
+    <section className="card">
+      <h2>История и место на диске</h2>
+      <Row title="Хранить подробную историю" hint="Старые записи раздела «История» удаляются автоматически. Счётчики прослушиваний и защита от повторов сохраняются всегда.">
+        <select value={months} onChange={(e) => onMonths(+e.target.value)}>
+          <option value={3}>3 месяца</option><option value={6}>6 месяцев</option><option value={12}>12 месяцев</option><option value={0}>Бессрочно</option>
+        </select>
+      </Row>
+      {s && <div className="country-box">
+        <p>Подробная история: <b>{num(s.history_rows)}</b> {s.history_rows ? `записей (с ${date(s.history_oldest!)})` : "записей"}.
+          Статистика за всё время: {num(s.stats.plays)} прослушиваний, {num(s.stats.tracks)} треков, {num(s.stats.artists)} исполнителей, {s.stats.hours} ч.</p>
+        <p className="muted">База истории и настроек: {mb(s.state_db_bytes)}{s.last_maintenance ? ` · последнее обслуживание ${new Date(s.last_maintenance.at * 1000).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}</p>
+      </div>}
+      <Row title="Кеш" hint={<>Обложки и фото исполнителей хранятся для быстрого показа{cache ? ` (не больше ${mb(cache.httpLimit)}, старые вытесняются сами)` : ""}. Очистка не затрагивает историю, каталоги, вход и настройки, музыка продолжит играть.</>}>
+        <span className="val wide">{cache ? mb(cacheBytes) : s ? `${num(s.covers_cached)} обл.` : ""}{cache && cache.logBytes ? <span className="muted"> · журналы {mb(cache.logBytes)}</span> : null}</span>
+        <button className="btn" disabled={busy} onClick={clear}>{busy ? "Очищаю…" : done || "Очистить кеш"}</button>
+      </Row>
+    </section>
+  );
 }
 
 export function SettingsView() {
@@ -38,6 +81,8 @@ export function SettingsView() {
           </select>
         </Row>
       </section>
+
+      <StorageSection months={settings.history_months ?? 12} onMonths={(m) => saveSettings({ history_months: m })} />
 
       <section className="card">
         <h2>Исполнители из России</h2>

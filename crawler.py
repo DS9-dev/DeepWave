@@ -145,6 +145,7 @@ class Store:
         self.db = sqlite3.connect(path, timeout=30, isolation_level=None)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
+        self.db.execute("PRAGMA journal_size_limit=33554432")   # журнал WAL после сброса не больше 32 МБ
         self.db.executescript(SCHEMA)
         self._migrate()
         self.run_id = None

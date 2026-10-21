@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from "electron";
 
 export type BackendInfo = { url: string; token: string; error: string; logPath: string };
 export type WinMode = "full" | "compact";
+export type CacheInfo = { httpBytes: number; httpLimit: number; logBytes: number };
 
 contextBridge.exposeInMainWorld("musicApp", {
   backend: (): Promise<BackendInfo> => ipcRenderer.invoke("backend:info"),
@@ -21,6 +22,10 @@ contextBridge.exposeInMainWorld("musicApp", {
   },
   openExternal: (url: string) => ipcRenderer.invoke("open-external", url),
   showLog: () => ipcRenderer.invoke("show-log"),
+  cache: {
+    info: (): Promise<CacheInfo> => ipcRenderer.invoke("cache:info"),
+    clear: (): Promise<CacheInfo> => ipcRenderer.invoke("cache:clear"),
+  },
   smoke: {
     enabled: (): Promise<boolean> => ipcRenderer.invoke("smoke:enabled"),
     rendered: (what: string) => ipcRenderer.send("smoke:rendered", what),

@@ -15,7 +15,7 @@ export type Catalog = {
 };
 export type Settings = {
   genres: string[]; volume: number; exclude_ru: boolean; artist_cooldown: number; track_cooldown_days: number;
-  theme: "auto" | "light" | "dark";
+  theme: "auto" | "light" | "dark"; history_months: number;
 };
 export type Status = {
   auth: "ok" | "none" | "offline" | "connecting"; account?: { name?: string; login?: string; has_plus?: boolean } | null;
@@ -24,6 +24,12 @@ export type Status = {
 };
 
 export type WinMode = "full" | "compact";
+export type CacheInfo = { httpBytes: number; httpLimit: number; logBytes: number };
+export type Storage = {
+  history_rows: number; history_oldest: number | null; history_months: number; covers_cached: number; state_db_bytes: number;
+  stats: { plays: number; artists: number; hours: number; tracks: number };
+  last_maintenance: { at: number; history_removed: number; covers: number } | null;
+};
 type Bridge = {
   backend: () => Promise<{ url: string; token: string; error: string; logPath: string }>;
   restartBackend: () => Promise<{ url: string; token: string; error: string; logPath: string }>;
@@ -34,6 +40,7 @@ type Bridge = {
     setPinned: (p: boolean) => Promise<boolean>;
   };
   smoke: { enabled: () => Promise<boolean>; rendered: (what: string) => void };
+  cache: { info: () => Promise<CacheInfo>; clear: () => Promise<CacheInfo> };
   openExternal: (url: string) => Promise<void>;
   showLog: () => Promise<void>;
   platform: string;

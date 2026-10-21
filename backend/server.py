@@ -7,6 +7,7 @@
 import argparse
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import re
 import sys
@@ -42,9 +43,11 @@ class App:
         self.auth = AuthFlow(on_success=self.connect)
         self.crawl = CrawlJob(on_progress=None, on_finish=self.rebuild)
         self.countries = CountriesJob(lambda: self.client, self.state, self.library)
+        self._maint_lock = threading.Lock()
         self.rebuild()
         threading.Thread(target=self.connect, daemon=True).start()
         threading.Thread(target=self._refresher, daemon=True).start()
+        threading.Thread(target=self._maintenance_loop, daemon=True).start()
 
     def connect(self):
         if not ym_auth.has_token():
@@ -75,6 +78,30 @@ class App:
 
     def rebuild(self):
         self.library.rebuild(self.state.kv("genre_titles") or {})
+
+    def maintain(self):
+        """Обслуживание: срок хранения истории, устаревшие ссылки на обложки, сжатие базы состояния."""
+        with self._maint_lock:
+            try:
+                res = self.state.maintain()
+                log.info("обслуживание: %s", res)
+                return res
+            except Exception as e:
+                log.warning("обслуживание не удалось: %s", e)
+                return {"error": str(e)}
+
+    def _maintenance_loop(self):
+        time.sleep(45)                  # не мешать запуску: первая очистка через 45 с, затем раз в 6 часов
+        while True:
+            self.maintain()
+            time.sleep(6 * 3600)
+
+    def save_settings(self, patch):
+        before = self.state.settings().get("history_months")
+        res = self.state.set_settings(patch)
+        if res.get("history_months") != before:          # срок хранения изменён — очистить сразу, в фоне
+            threading.Thread(target=self.maintain, daemon=True).start()
+        return res
 
     def _refresher(self):
         while True:                     # во время сбора каталог пополняется — обновляем индекс
@@ -247,7 +274,10 @@ def make_handler(app: App, token: str):
                 ("POST", "/api/history/end"): lambda: (app.state.play_end(b["play_id"], b.get("listened_s"),
                                                                           b.get("status", "finished")), {"ok": True})[1],
                 ("GET", "/api/settings"): lambda: app.state.settings(),
-                ("POST", "/api/settings"): lambda: app.state.set_settings(b),
+                ("POST", "/api/settings"): lambda: app.save_settings(b),
+                ("GET", "/api/storage"): lambda: app.state.storage(),
+                ("POST", "/api/storage/clear-cache"): lambda: {"covers_removed": app.state.clear_cache(), **app.state.storage()},
+                ("POST", "/api/storage/maintain"): lambda: {**app.maintain(), **app.state.storage()},
                 ("GET", "/api/crawl"): lambda: app.crawl.status(),
                 ("POST", "/api/crawl/start"): lambda: self._crawl_start(b),
                 ("POST", "/api/crawl/stop"): lambda: (app.crawl.stop(), app.crawl.status())[1],
@@ -333,7 +363,8 @@ def main():
     root = Path(a.root)
     (root / "catalog").mkdir(exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-                        handlers=[logging.FileHandler(root / "catalog" / "app_backend.log", "a", "utf-8")])
+                        handlers=[RotatingFileHandler(root / "catalog" / "app_backend.log", maxBytes=1_000_000,
+                                                      backupCount=1, encoding="utf-8")])
     for h in logging.getLogger().handlers:
         h.addFilter(ym_auth.RedactFilter())
     logging.getLogger("yandex_music").setLevel(logging.ERROR)
