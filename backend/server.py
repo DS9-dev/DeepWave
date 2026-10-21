@@ -26,6 +26,8 @@ import ym_auth                      # noqa: E402
 from state import State             # noqa: E402
 from library import Library         # noqa: E402
 from audio import Audio, Unavailable  # noqa: E402
+from library import country_blocked  # noqa: E402
+from country_names import all_countries  # noqa: E402
 from jobs import AuthFlow, CrawlJob, CountriesJob, artist_meta_rows  # noqa: E402
 
 log = logging.getLogger("deepwave")
@@ -42,7 +44,9 @@ class App:
         self.audio = Audio(lambda: self.client, self.state)
         self.auth = AuthFlow(on_success=self.connect)
         self.crawl = CrawlJob(on_progress=None, on_finish=self.rebuild)
-        self.countries = CountriesJob(lambda: self.client, self.state, self.library)
+        self.countries = CountriesJob(self.state, self.library, lambda: self.client)
+        self._blocked = None                       # кеш фильтра стран: (ключ настроек, множество)
+        self.countries.on_change = self._invalidate_filter
         self._maint_lock = threading.Lock()
         self.rebuild()
         threading.Thread(target=self.connect, daemon=True).start()
@@ -78,6 +82,17 @@ class App:
 
     def rebuild(self):
         self.library.rebuild(self.state.kv("genre_titles") or {})
+        self._invalidate_filter()
+        self.auto_countries()
+
+    def auto_countries(self):
+        """Новые исполнители проверяются сами, если пользователь уже запускал определение стран
+        и фильтр стран включён. Проверка идёт в фоне, 1 запрос в секунду."""
+        try:
+            if self.client and self.state.kv("countries_started") and self.state.settings().get("country_mode") != "all":
+                self.countries.start(auto=True)
+        except Exception as e:
+            log.warning("страны: автозапуск не удался: %s", e)
 
     def maintain(self):
         """Обслуживание: срок хранения истории, устаревшие ссылки на обложки, сжатие базы состояния."""
@@ -101,6 +116,9 @@ class App:
         res = self.state.set_settings(patch)
         if res.get("history_months") != before:          # срок хранения изменён — очистить сразу, в фоне
             threading.Thread(target=self.maintain, daemon=True).start()
+        self._invalidate_filter()
+        if any(k.startswith("country") for k in patch):
+            self.auto_countries()
         return res
 
     def _refresher(self):
@@ -113,8 +131,25 @@ class App:
                     pass
 
     # ------------------------------------------------------------------ выбор и подготовка трека
-    def ru_ids(self, settings):
-        return self.library.ru_ids(self.state.countries()) if settings.get("exclude_ru") else None
+    def _invalidate_filter(self):
+        self._blocked = None
+
+    def blocked(self, settings):
+        """Исполнители, которых не пропускает фильтр стран (кешируется до изменения настроек или данных)."""
+        key = (settings.get("country_mode"), tuple(settings.get("country_list") or []),
+               bool(settings.get("country_unknown", True)), self.library.built_at)
+        cached = self._blocked
+        if cached and cached[0] == key:
+            return cached[1]
+        ids = country_blocked(self.library.artists.keys(), self.state.artist_countries(), settings)
+        self._blocked = (key, ids)
+        return ids
+
+    def filter_summary(self, settings=None):
+        settings = settings or self.state.settings()
+        n = len(self.library.artists)
+        b = len(self.blocked(settings))
+        return {"artists": n, "blocked": b, "allowed": n - b}
 
     def prepare(self, rec):
         """Проверяет доступность (получает ссылку) и добавляет обложку."""
@@ -125,11 +160,14 @@ class App:
         settings = self.state.settings()
         keys = body.get("genres") or settings.get("genres") or []
         exclude = set(map(str, body.get("exclude") or []))
-        ru = self.ru_ids(settings)
+        blocked = self.blocked(settings)
         last_err = None
         for _ in range(8):
-            rec = self.library.pick(keys, self.state, settings, ru, exclude, body.get("exclude_artists") or [])
+            rec = self.library.pick(keys, self.state, settings, blocked, exclude, body.get("exclude_artists") or [])
             if rec is None:
+                if blocked and self.library.eligible_artists(keys):
+                    return {"error": "фильтр стран исключил всех исполнителей выбранных жанров — измените его в настройках",
+                            "filter": True}
                 return {"error": "в выбранных жанрах нет треков"}
             try:
                 return self.prepare(rec)
@@ -282,8 +320,10 @@ def make_handler(app: App, token: str):
                 ("POST", "/api/crawl/start"): lambda: self._crawl_start(b),
                 ("POST", "/api/crawl/stop"): lambda: (app.crawl.stop(), app.crawl.status())[1],
                 ("POST", "/api/rebuild"): lambda: (app.rebuild(), {"catalogs": app.library.catalogs})[1],
-                ("GET", "/api/countries"): lambda: app.countries.status(),
-                ("POST", "/api/countries/start"): lambda: app.countries.start(),
+                ("GET", "/api/countries/names"): lambda: {"names": all_countries()},
+                ("GET", "/api/countries"): lambda: {**app.countries.status(), "filter": app.filter_summary()},
+                ("POST", "/api/countries/start"): lambda: app.countries.start(recheck=bool(b.get("recheck")),
+                                                                         musicbrainz=b.get("musicbrainz", True) is not False),
                 ("POST", "/api/countries/stop"): lambda: (app.countries.stop(), app.countries.status())[1],
                 ("POST", "/api/shutdown"): lambda: self._shutdown(),
             }

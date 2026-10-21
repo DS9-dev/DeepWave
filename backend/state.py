@@ -17,13 +17,17 @@ import time
 DEFAULTS = {
     "genres": [],                 # выбранные жанры: ["allrock:rusrock", ...] (каталог:жанр)
     "volume": 0.8,
-    "exclude_ru": False,
+    "exclude_ru": False,          # устарело: переносится в country_mode/country_list
+    "country_mode": "all",        # all | include | exclude
+    "country_list": [],           # ISO-коды стран (как в MusicBrainz): ["RU", "SU", ...]
+    "country_unknown": True,      # пропускать исполнителей с неизвестной страной (в режимах include/exclude)
     "artist_cooldown": 150,       # сколько последних исполнителей не повторять
     "track_cooldown_days": 30,    # трек не повторяется N дней
     "theme": "auto",
     "history_months": 12,         # срок хранения подробной истории: 3, 6, 12 или 0 (бессрочно)
 }
 HISTORY_CHOICES = (3, 6, 12, 0)
+COUNTRY_MODES = ("all", "include", "exclude")
 MONTH = 30.44 * 86400
 COVER_TTL = 120 * 86400           # ссылка на обложку, не использованная 120 дней, удаляется (её можно получить снова)
 UNAVAILABLE_TTL = 60 * 86400      # отметка «трек недоступен» действует 14 дней, хранится 60
@@ -44,6 +48,9 @@ CREATE TABLE IF NOT EXISTS covers(track_id TEXT PRIMARY KEY, url TEXT, album_cov
 CREATE TABLE IF NOT EXISTS unavailable(track_id TEXT PRIMARY KEY, reason TEXT, at REAL);
 CREATE TABLE IF NOT EXISTS artist_meta(artist_id INTEGER PRIMARY KEY, countries TEXT, fetched_at REAL, cover TEXT);
 CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS artist_country(
+  artist_id INTEGER PRIMARY KEY, status TEXT, country TEXT, source TEXT, mbid TEXT, mb_name TEXT,
+  note TEXT, checked_at REAL, attempts INTEGER DEFAULT 0, raw TEXT, albums TEXT);
 """
 
 
@@ -57,10 +64,15 @@ class State:
         self.db.executescript(SCHEMA)
         if "cover" not in {r[1] for r in self.db.execute("PRAGMA table_info(artist_meta)")}:
             self.db.execute("ALTER TABLE artist_meta ADD COLUMN cover TEXT")
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(artist_country)")}
+        for col in ("raw", "albums"):
+            if col not in have:
+                self.db.execute(f"ALTER TABLE artist_country ADD COLUMN {col} TEXT")
         # записи, оставшиеся «играющими» после прошлого закрытия приложения
         self.db.execute("UPDATE plays SET status='stopped' WHERE status='playing'")
         self.lock = threading.RLock()
         self._migrate_stats()
+        self.migrate_country_setting()
 
     def _migrate_stats(self):
         """Однократно: статистика по трекам из уже накопленной истории (без потери данных)."""
@@ -95,6 +107,10 @@ class State:
                 pass
         if out.get("history_months") not in HISTORY_CHOICES:
             out["history_months"] = DEFAULTS["history_months"]
+        if out.get("country_mode") not in COUNTRY_MODES:
+            out["country_mode"] = "all"
+        if not isinstance(out.get("country_list"), list):
+            out["country_list"] = []
         return out
 
     def set_settings(self, patch):
@@ -102,6 +118,14 @@ class State:
             for k, v in patch.items():
                 if k == "history_months" and v not in HISTORY_CHOICES:
                     continue
+                if k == "country_mode" and v not in COUNTRY_MODES:
+                    continue
+                if k == "country_list":
+                    if not isinstance(v, list):
+                        continue
+                    v = sorted({str(c).strip().upper() for c in v if 2 <= len(str(c).strip()) <= 3})
+                if k == "country_unknown":
+                    v = bool(v)
                 if k in DEFAULTS:
                     self.db.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (k, json.dumps(v)))
         return self.settings()
@@ -269,5 +293,46 @@ class State:
             out.update({r[0]: r[1] for r in self.q(f"SELECT artist_id, cover FROM artist_meta WHERE artist_id IN ({q})", *chunk)})
         return out
 
-    def countries(self):
-        return {r[0]: json.loads(r[1] or "[]") for r in self.q("SELECT artist_id, countries FROM artist_meta")}
+    # --- страны исполнителей (MusicBrainz); статус error — сбой связи, проверяется при следующем запуске
+    def set_artist_country(self, aid, res):
+        """res: status, countries (ISO-коды), source, mbid, mb_name, note, raw (как прислал источник), albums."""
+        cs = ",".join(res.get("countries") or ([res["country"]] if res.get("country") else []))
+        self.x("INSERT INTO artist_country(artist_id,status,country,source,mbid,mb_name,note,checked_at,attempts,raw,albums) "
+               "VALUES(?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(artist_id) DO UPDATE SET status=excluded.status, "
+               "country=excluded.country, source=excluded.source, mbid=excluded.mbid, mb_name=excluded.mb_name, "
+               "note=excluded.note, checked_at=excluded.checked_at, attempts=artist_country.attempts+1, "
+               "raw=COALESCE(excluded.raw, artist_country.raw), albums=COALESCE(excluded.albums, artist_country.albums)",
+               int(aid), res.get("status"), cs or None, res.get("source"), res.get("mbid"), res.get("mb_name"),
+               (res.get("note") or "")[:200], time.time(),
+               json.dumps(res["raw"], ensure_ascii=False) if res.get("raw") is not None else None,
+               json.dumps(res["albums"][:10], ensure_ascii=False) if res.get("albums") else None)
+
+    def artist_country_rows(self):
+        """{artist_id: (status, country, checked_at, source)}"""
+        return {r[0]: (r[1], r[2], r[3], r[4]) for r in
+                self.q("SELECT artist_id, status, country, checked_at, source FROM artist_country")}
+
+    def artist_country_albums(self, ids):
+        out = {}
+        ids = list(ids)
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            q = ",".join("?" * len(chunk))
+            for aid, al in self.q(f"SELECT artist_id, albums FROM artist_country WHERE albums IS NOT NULL "
+                                  f"AND artist_id IN ({q})", *chunk):
+                out[aid] = json.loads(al)
+        return out
+
+    def artist_countries(self):
+        """{artist_id: frozenset(ISO-кодов)} — только достоверно определённые."""
+        return {r[0]: frozenset(r[1].split(",")) for r in self.q(
+            "SELECT artist_id, country FROM artist_country WHERE status='matched' AND country IS NOT NULL AND country<>''")}
+
+    def migrate_country_setting(self):
+        """Старая галочка «исключать российских» → режим «Исключить выбранные страны» с Россией."""
+        if self.kv("country_setting_migrated"):
+            return
+        have = {r[0] for r in self.q("SELECT k FROM settings")}
+        if "country_mode" not in have and self.settings().get("exclude_ru"):
+            self.set_settings({"country_mode": "exclude", "country_list": ["RU"], "country_unknown": True})
+        self.kv("country_setting_migrated", 1)

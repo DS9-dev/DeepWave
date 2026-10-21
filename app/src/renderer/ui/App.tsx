@@ -137,6 +137,7 @@ export function App() {
   const saveSettings = useCallback(async (p: Partial<Settings>) => {
     const s = await api.post<Settings>("/api/settings", p);
     setSettings(s);
+    if (Object.keys(p).some((k) => k.startsWith("country"))) player.refreshUpcoming();   // заранее выбранный трек — по новому фильтру
   }, []);
 
   const titles = useMemo(() => {

@@ -14,6 +14,7 @@ catalog/
 results/
 results_depth/
 results_play/
+country_probe_*.json
 *.log
 # аудио
 *.mp3

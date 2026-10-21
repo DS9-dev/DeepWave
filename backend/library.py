@@ -13,8 +13,31 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-RU_VALUES = {"ru", "rus", "russia", "россия", "российская федерация", "russian federation"}
 SKIP_FILES = {"app_state"}
+
+
+def country_blocked(artist_ids, countries, settings):
+    """Множество исполнителей, которых фильтр стран не пропускает.
+
+    countries — только достоверно определённые страны {artist_id: множество ISO-кодов}. Если у исполнителя
+    несколько стран, он считается выбранным, если хотя бы одна из них в списке (в режиме «исключить» —
+    исключается). Неизвестная страна никогда не считается совпадением со списком: такие исполнители
+    проходят или нет по настройке country_unknown.
+    """
+    mode = settings.get("country_mode", "all")
+    if mode not in ("include", "exclude"):
+        return set()
+    chosen = {str(c).upper() for c in settings.get("country_list") or []}
+    allow_unknown = bool(settings.get("country_unknown", True))
+    out = set()
+    for aid in artist_ids:
+        cs = countries.get(aid)
+        if not cs:
+            if not allow_unknown:
+                out.add(aid)
+        elif (mode == "include") != bool(cs & chosen):
+            out.add(aid)
+    return out
 
 
 def norm_title(s):
@@ -156,20 +179,20 @@ class Library:
         return [{k: v for k, v in self.artists[i].items() if k != "_s"} for i in self.rng.sample(ids, min(n, len(ids)))]
 
     # ------------------------------------------------------------ справедливый выбор
-    def eligible_artists(self, keys, ru_ids=None):
+    def eligible_artists(self, keys, blocked=None):
         with self.lock:
             by_genre = self.by_genre
         keys = [k for k in keys if k in by_genre] or list(by_genre)
         pool = defaultdict(list)
         for k in keys:
             for aid, tids in by_genre[k].items():
-                if ru_ids and aid in ru_ids:
+                if blocked and aid in blocked:
                     continue
                 pool[aid].extend(tids)
         return pool
 
-    def pick(self, keys, state, settings, ru_ids=None, exclude_tracks=(), exclude_artists=()):
-        pool = self.eligible_artists(keys, ru_ids)
+    def pick(self, keys, state, settings, blocked=None, exclude_tracks=(), exclude_artists=()):
+        pool = self.eligible_artists(keys, blocked)
         if not pool:
             return None
         cooldown = min(int(settings.get("artist_cooldown", 150)), max(0, len(pool) // 3))
@@ -188,6 +211,3 @@ class Library:
         aid = self.rng.choice(candidates)
         tids = [t for t in pool[aid] if t not in bad] or pool[aid]
         return self.public(self.rng.choice(tids))
-
-    def ru_ids(self, countries):
-        return {aid for aid, cs in countries.items() if any((c or "").strip().casefold() in RU_VALUES for c in cs)}

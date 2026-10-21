@@ -192,9 +192,20 @@ class Player {
     this.prepareUpcoming(gen);
   }
 
+  /** Настройки отбора изменились (например, фильтр стран): заранее выбранный случайный трек выбрать заново. */
+  refreshUpcoming() {
+    if (this.mode.kind !== "radio" || this.forward.length || !this.state.current) return;
+    this.releaseIdle();
+    this.set({ upcoming: null });
+    this.prepareUpcoming(this.gen);
+  }
+
+  private upTok = 0;
+
   private async prepareUpcoming(gen: number) {
+    const tok = ++this.upTok;
     const t = await this.fetchUpcoming(gen);
-    if (gen !== this.gen || !t) return;
+    if (gen !== this.gen || !t || tok !== this.upTok) return;
     rememberCover(t.id, t.cover);
     const idle = this.idle;
     idle.src = api.stream(t.stream!);

@@ -317,3 +317,20 @@ input[type="range"] { accent-color: var(--accent); width: 180px; }
 .cp-volume { display: flex; align-items: center; gap: 2px; color: var(--muted); }
 .slider.vol.mini { width: 74px; }
 html[data-mode="compact"] body { background: var(--surface); }
+
+/* фильтр стран */
+.country-pick { display: grid; gap: 10px; padding: 4px 0 12px; }
+.country-pick .chip span { font-size: 10px; }
+.country-pick .search { width: 100%; max-width: 420px; }
+.country-list { max-height: 248px; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 2px 12px; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.country-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.country-item:hover { background: var(--surface-3); }
+.country-item.on { color: var(--accent); font-weight: 560; }
+.country-item input { accent-color: var(--accent); margin: 0; }
+.country-item .cn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.country-item .cc { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.filter-sum { font-size: 13px; margin: 4px 0 12px; }
+.filter-sum.warn { color: var(--danger); }
+.country-box .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.country-run { margin: 0; width: 100%; box-sizing: border-box; background: var(--surface); display: grid; gap: 6px; justify-items: start; }
+.country-run .bar { width: 100%; margin: 0; }

@@ -14,8 +14,17 @@ export type Catalog = {
   discographies: number; queue: number; albums: number; runs: number; genres: GenreInfo[]; error?: string;
 };
 export type Settings = {
-  genres: string[]; volume: number; exclude_ru: boolean; artist_cooldown: number; track_cooldown_days: number;
+  genres: string[]; volume: number; artist_cooldown: number; track_cooldown_days: number;
   theme: "auto" | "light" | "dark"; history_months: number;
+  country_mode: "all" | "include" | "exclude"; country_list: string[]; country_unknown: boolean;
+};
+export type CountryStatus = {
+  running: boolean; phase?: "yandex" | "musicbrainz"; auto?: boolean; done?: number; todo?: number; found?: number;
+  found_yandex?: number; found_mb?: number; errors?: number; eta_s?: number; current?: string | null; message?: string | null;
+  artists: number; checked: number; known: number; unknown: number; known_pct: number | null; known_of_checked_pct: number | null;
+  statuses: Record<string, number>; by_source: Record<string, number>; countries: [string, number][];
+  pending: number; pending_yandex: number; pending_mb: number;
+  filter: { artists: number; blocked: number; allowed: number };
 };
 export type Status = {
   auth: "ok" | "none" | "offline" | "connecting"; account?: { name?: string; login?: string; has_plus?: boolean } | null;
