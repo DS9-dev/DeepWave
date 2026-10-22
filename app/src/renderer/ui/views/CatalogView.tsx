@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, Catalog, num } from "../../api";
+import { api, Catalog, ExtendResult, num } from "../../api";
 import { useApp } from "../App";
 import { Empty } from "../common";
 import { ICatalog, IStop } from "../icons";
@@ -32,7 +32,36 @@ function Progress({ st }: { st: CrawlStatus }) {
   );
 }
 
-function CatalogCard({ c, crawl, onStart, onStop }: { c: Catalog; crawl: CrawlStatus | null; onStart: (lim: number) => void; onStop: () => void }) {
+function ExtendGenres({ c, tree, disabled, onDone }: { c: Catalog; tree: GNode[]; disabled: boolean; onDone: (r: ExtendResult) => void }) {
+  const [open, setOpen] = useState(false);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const have = new Set(c.scope);
+  const music = tree.filter((g) => !/podcast|audiobook|fairytale|poem|children|fiction|literature|booksnot|^all$|naturesounds|other/i.test(g.id));
+  const avail = music.filter((g) => !have.has(g.id));
+  if (!avail.length) return null;
+  const toggle = (id: string) => { const s = new Set(sel); if (s.has(id)) s.delete(id); else s.add(id); setSel(s); };
+  const run = async () => {
+    setBusy(true);
+    try { onDone(await api.post<ExtendResult>("/api/catalog/extend", { catalog: c.name, genres: [...sel] })); setSel(new Set()); setOpen(false); }
+    catch (e) { onDone({ added: [], error: (e as Error).message }); }
+    finally { setBusy(false); }
+  };
+  if (!open) return <button className="btn ghost" disabled={disabled} onClick={() => setOpen(true)}>Добавить направления в каталог…</button>;
+  return (
+    <div className="extend-box">
+      <p><b>Добавить направления</b> — жанры добавляются вместе со всеми поджанрами. Уже сохранённые треки этих жанров станут доступны сразу, без запросов к Яндексу;
+        новые исполнители встанут в очередь сбора. Перед изменением создаётся резервная копия каталога. История, настройки и прогресс сбора сохраняются.</p>
+      <div className="chips">{avail.map((g) => <button key={g.id} className={`chip ${sel.has(g.id) ? "on" : ""}`} onClick={() => toggle(g.id)} title={g.sub.map((x) => x.title).join(", ")}>{g.title}{g.sub.length ? <span>+{g.sub.length}</span> : null}</button>)}</div>
+      <div className="row gap">
+        <button className="btn primary" disabled={busy || disabled || !sel.size} onClick={run}>{busy ? "Создаю копию и пересчитываю…" : `Добавить (${sel.size})`}</button>
+        <button className="btn ghost" disabled={busy} onClick={() => setOpen(false)}>Отмена</button>
+      </div>
+    </div>
+  );
+}
+
+function CatalogCard({ c, crawl, tree, onStart, onStop, onExtended }: { c: Catalog; crawl: CrawlStatus | null; tree: GNode[]; onStart: (lim: number) => void; onStop: () => void; onExtended: (r: ExtendResult) => void }) {
   const { genreTitle } = useApp();
   const [lim, setLim] = useState(1500);
   const running = crawl?.running && crawl.catalog === c.name;
@@ -47,12 +76,13 @@ function CatalogCard({ c, crawl, onStart, onStop }: { c: Catalog; crawl: CrawlSt
       </div>
       <div className="stats">
         <div><b>{num(c.tracks)}</b>треков жанра</div>
-        <div><b>{num(c.artists)}</b>исполнителей найдено</div>
+        <div title="Уникальные исполнители, у которых в каталоге есть свои треки выбранных жанров"><b>{num(c.playable_artists ?? 0)}</b>исполнителей можно слушать</div>
+        <div title="Все найденные кандидаты: у части ещё не собрана дискография или они встречаются только как соавторы"><b>{num(c.candidates ?? c.artists)}</b>кандидатов найдено</div>
         <div><b>{num(c.discographies)}</b>дискографий собрано</div>
         <div><b>{num(c.queue)}</b>в очереди</div>
       </div>
       <div className="bar thin" title={`Собрано ${donePct}% дискографий найденных исполнителей`}><div style={{ width: `${donePct}%` }} /></div>
-      <p className="fine">Собрано {donePct}% дискографий. Пока очередь не пуста, каждый новый сбор добавляет исполнителей и треки, уже обработанное не повторяется.</p>
+      <p className="fine">Собрано {donePct}% дискографий кандидатов. «Можно слушать» — исполнители, у которых уже есть свои треки нужных жанров; остальные кандидаты станут доступны, когда сбор дойдёт до их дискографий (часть из них окажется другого жанра или встречается только как соавтор). Уже обработанное не повторяется.</p>
       {running ? <>
         <Progress st={crawl!} />
         <button className="btn danger" onClick={onStop} disabled={crawl!.stopping}><IStop size={14} />Остановить</button>
@@ -63,6 +93,7 @@ function CatalogCard({ c, crawl, onStart, onStop }: { c: Catalog; crawl: CrawlSt
           {busyOther && <span className="muted small">Сейчас собирается «{crawl!.catalog}»</span>}
         </div>
       )}
+      {!running && tree.length > 0 && <ExtendGenres c={c} tree={tree} disabled={!!crawl?.running} onDone={onExtended} />}
     </section>
   );
 }
@@ -93,6 +124,9 @@ export function CatalogView() {
   const { catalogs, refresh, status } = useApp();
   const [crawl, setCrawl] = useState<CrawlStatus | null>(null);
   const [err, setErr] = useState("");
+  const [ext, setExt] = useState<ExtendResult | null>(null);
+  const [tree, setTree] = useState<GNode[]>([]);
+  useEffect(() => { api.get<{ tree: GNode[] }>("/api/genre-tree").then((r) => setTree(r.tree)).catch(() => {}); }, [status?.auth]);
   useEffect(() => {
     let alive = true;
     const poll = async () => { try { const s = await api.get<CrawlStatus>("/api/crawl"); if (alive) setCrawl(s); } catch { /* */ } };
@@ -116,7 +150,12 @@ export function CatalogView() {
       {err && <div className="note error">{err}</div>}
       {lastReason && <div className="note">Последний сбор завершён: {lastReason}. +{num(crawl!.new_artists || 0)} исполнителей, +{num(crawl!.new_tracks || 0)} треков.</div>}
       {!catalogs.length && <Empty title="Каталогов пока нет">Создайте первый каталог ниже.</Empty>}
-      {catalogs.map((c) => <CatalogCard key={c.name} c={c} crawl={crawl} onStart={(lim) => start(c.name, c.roots, lim)} onStop={stop} />)}
+      {ext && (ext.error ? <div className="note error">{ext.error}</div> : ext.added.length ? <div className="note">
+        Добавлено жанров: {ext.added.length}. Треков жанра: {num(ext.before!.tracks)} → <b>{num(ext.after!.tracks)}</b>; исполнителей можно слушать: {num(ext.before!.playable)} → <b>{num(ext.after!.playable)}</b>;
+        кандидатов: {num(ext.before!.artists)} → {num(ext.after!.artists)}, в очереди {num(ext.queue ?? 0)}. Резервная копия: <span className="mono">{ext.backup}</span></div>
+        : <div className="note">{ext.message}</div>)}
+      {catalogs.map((c) => <CatalogCard key={c.name} c={c} crawl={crawl} tree={tree} onStart={(lim) => start(c.name, c.roots, lim)} onStop={stop}
+        onExtended={(r) => { setExt(r); refresh(); }} />)}
       {crawl && crawl.log.length > 0 && <section className="card">
         <div className="card-head"><h2>Журнал сбора</h2></div>
         <pre className="log">{crawl.log.slice(-40).map((l) => `${l.t}  ${l.msg}`).join("\n")}</pre>

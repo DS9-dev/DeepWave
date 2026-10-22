@@ -1,4 +1,5 @@
-import { num, plural } from "../../api";
+import { useEffect, useState } from "react";
+import { api, num, Pool, plural } from "../../api";
 import { player } from "../../player";
 import { useApp } from "../App";
 import { Cover, Empty, TrackRow, usePlayer, useCover } from "../common";
@@ -36,40 +37,72 @@ function NowPlaying() {
 function GenrePicker() {
   const { catalogs, settings, saveSettings } = useApp();
   const st = usePlayer();
-  const sel = new Set(settings?.genres ?? []);
-  const all = catalogs.flatMap((c) => c.genres);
-  const chosen = all.filter((g) => sel.has(g.key));
-  const eff = chosen.length ? chosen : all;
-  const artists = eff.reduce((a, g) => a + g.artists, 0), tracks = eff.reduce((a, g) => a + g.tracks, 0);
-  const toggle = (k: string) => { const s = new Set(sel); if (s.has(k)) s.delete(k); else s.add(k); saveSettings({ genres: [...s] }); };
+  const [pool, setPool] = useState<Pool | null>(null);
+  const selected = settings?.genres ?? [];
+  const sel = new Set(selected);
+  const known = new Set(catalogs.flatMap((c) => c.genres.map((g) => g.key)));
+  const chosen = selected.filter((k) => known.has(k));
+  const cmode = settings?.country_mode ?? "all";
+  // уникальные исполнители выбранных жанров с учётом фильтра стран — считает сервис
+  useEffect(() => {
+    let alive = true;
+    api.post<Pool>("/api/pool", { genres: chosen }).then((r) => alive && setPool(r)).catch(() => {});
+    return () => { alive = false; };
+  }, [chosen.join("|"), catalogs, cmode, (settings?.country_list ?? []).join(","), settings?.country_unknown]);
+  const save = (s: Set<string>) => saveSettings({ genres: [...s] });
+  const toggle = (k: string) => { const s = new Set(sel); if (s.has(k)) s.delete(k); else s.add(k); save(s); };
+  const toggleGroup = (keys: string[]) => {
+    const s = new Set(sel);
+    const all = keys.every((k) => s.has(k));
+    keys.forEach((k) => (all ? s.delete(k) : s.add(k)));
+    save(s);
+  };
   const start = () => player.startRadio(settings?.genres ?? []);
   if (!catalogs.length) return <Empty title="Каталог пуст">Откройте раздел «Каталог» и запустите сбор.</Empty>;
+  const filtered = pool && pool.blocked_artists > 0;
   return (
     <section className="card genres">
       <div className="card-head">
         <div>
           <h2>Жанры</h2>
-          <p className="muted">{chosen.length ? `Выбрано: ${chosen.length}` : "Не выбрано — звучат все жанры"} · {chosen.length > 1 ? "≈" : ""}{num(artists)} {plural(artists, "исполнитель", "исполнителя", "исполнителей")}, {num(tracks)} {plural(tracks, "трек", "трека", "треков")}</p>
+          <p className="muted">{chosen.length ? `Выбрано жанров: ${chosen.length}` : "Не выбрано — звучат все жанры"}
+            {pool && <> · <b>{num(pool.allowed_artists)}</b> {plural(pool.allowed_artists, "исполнитель", "исполнителя", "исполнителей")}, {num(pool.allowed_tracks)} {plural(pool.allowed_tracks, "трек", "трека", "треков")}</>}
+            {filtered && <span title="Активен фильтр стран (Настройки → «Страны исполнителей»)"> · без {num(pool!.blocked_artists)} по фильтру стран</span>}</p>
         </div>
         <div className="row gap">
           {chosen.length > 0 && <button className="btn ghost" onClick={() => saveSettings({ genres: [] })}>Сбросить</button>}
-          <button className="btn primary" onClick={start} disabled={st.starting}><IShuffle size={16} />{st.current ? "Новая подборка" : "Слушать подборку"}</button>
+          <button className="btn primary" onClick={start} disabled={st.starting || (pool !== null && pool.allowed_artists === 0)}><IShuffle size={16} />{st.current ? "Новая подборка" : "Слушать подборку"}</button>
         </div>
       </div>
+      {pool && pool.allowed_artists === 0 && pool.artists > 0 && <div className="note">Фильтр стран исключил всех исполнителей выбранных жанров — измените его в настройках.</div>}
       {catalogs.map((c) => (
-        <div key={c.name} className="genre-group">
+        <div key={c.name} className="genre-catalog">
           {catalogs.length > 1 && <div className="group-label">{c.name}</div>}
-          <div className="chips">
-            {c.genres.map((g) => (
-              <button key={g.key} className={`chip ${sel.has(g.key) ? "on" : ""}`} onClick={() => toggle(g.key)}
-                title={`${num(g.artists)} исполнителей · ${num(g.tracks)} треков`}>
-                {g.title}<span>{num(g.artists)}</span>
-              </button>
-            ))}
-          </div>
+          {(c.groups?.length ? c.groups : [{ id: c.name, title: c.name, keys: c.genres.map((g) => g.key), artists: 0, tracks: 0 }]).map((grp) => {
+            const gs = grp.keys.map((k) => c.genres.find((g) => g.key === k)!).filter(Boolean);
+            const on = gs.filter((g) => sel.has(g.key)).length;
+            const state = on === 0 ? "" : on === gs.length ? "on" : "partial";
+            return (
+              <div key={grp.id} className="genre-group">
+                <button className={`group-chip ${state}`} onClick={() => toggleGroup(grp.keys)}
+                  title={state === "on" ? "Снять всю группу" : "Выбрать всю группу"}>
+                  <i className="check" />{grp.title}<span>{num(grp.artists)}</span>
+                </button>
+                <div className="chips">
+                  {gs.map((g) => (
+                    <button key={g.key} className={`chip ${sel.has(g.key) ? "on" : ""}`} onClick={() => toggle(g.key)}
+                      title={`${num(g.artists)} исполнителей · ${num(g.tracks)} треков${g.general ? " · альбомы, отмеченные только общим жанром" : ""}`}>
+                      {g.general && gs.length > 1 ? `${g.title}: общее` : g.title}<span>{num(g.artists)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       ))}
-      <p className="fine">Сначала случайно выбирается исполнитель, затем его трек: известность и размер дискографии не дают преимущества. Недавние исполнители и треки не повторяются.</p>
+      <p className="fine">Кнопка группы выбирает её целиком, отдельные жанры — по одному. Числа — уникальные исполнители, у которых есть треки этого жанра.
+        Сначала случайно выбирается исполнитель, затем его трек: известность и размер дискографии не дают преимущества. Недавние исполнители и треки не повторяются.</p>
     </section>
   );
 }

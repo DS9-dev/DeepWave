@@ -1,7 +1,7 @@
 {
   "name": "deepwave",
   "productName": "DeepWave",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "DeepWave — неофициальный настольный клиент Яндекс Музыки для широкого случайного прослушивания каталога",
   "private": true,
   "main": "dist/main/main.js",

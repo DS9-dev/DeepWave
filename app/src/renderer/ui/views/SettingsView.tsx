@@ -91,7 +91,7 @@ export function SettingsView() {
 
       <section className="card">
         <h2>О приложении</h2>
-        <Row title="DeepWave 1.2" hint={<>Неофициальный клиент Яндекс Музыки · папка проекта: {status?.root}<br />Python {status?.python}</>}>
+        <Row title="DeepWave 1.3" hint={<>Неофициальный клиент Яндекс Музыки · папка проекта: {status?.root}<br />Python {status?.python}</>}>
           {bridge && <button className="btn ghost" onClick={() => bridge!.showLog()}>Журнал сервиса</button>}
         </Row>
       </section>

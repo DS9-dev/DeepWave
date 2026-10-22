@@ -12,6 +12,8 @@ DeepWave — накопительный сборщик каталога Янде
   python crawler.py run --genres allrock,alternative,punk,metal,indie --catalog rock_wide
   python crawler.py status                              # прогресс и статистика
   python crawler.py export                              # CSV-выгрузка
+  python crawler.py extend --catalog allrock --genres alternative,indie,punk,metal,ska
+                                                        # добавить жанры в каталог (с резервной копией)
 
 Ctrl+C один раз — дождаться конца текущей задачи и выйти;
 Ctrl+C второй раз — выйти немедленно (незавершённая задача будет повторена).
@@ -598,6 +600,152 @@ class Lock:
             sys.exit("Этот каталог уже собирается в другом окне.")
 
 
+# ======================================================================= расширение жанров каталога
+def genre_family(flat, gid):
+    """Жанр со всеми поджанрами. flat: {id: id родителя или None}."""
+    out = {gid}
+    for k, parent in flat.items():
+        if parent == gid:
+            out |= genre_family(flat, k)
+    return out
+
+
+def backup_catalog(path, log=print):
+    """Согласованная копия базы (sqlite backup) в catalog/backups/<имя>-<дата>.sqlite."""
+    dest_dir = path.parent / "backups"
+    dest_dir.mkdir(exist_ok=True)
+    dest = dest_dir / f"{path.stem}-{datetime.now():%Y%m%d-%H%M%S}.sqlite"
+    src = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+    dst = sqlite3.connect(dest)
+    try:
+        src.backup(dst)
+        dst.execute("PRAGMA journal_mode=DELETE")       # копия — один самостоятельный файл
+    finally:
+        dst.close()
+        src.close()
+    chk = sqlite3.connect(f"file:{dest}?mode=ro", uri=True)
+    try:
+        ok = chk.execute("PRAGMA quick_check").fetchone()[0]
+        n_src = sqlite3.connect(f"file:{path}?mode=ro", uri=True).execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+        n_dst = chk.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+    finally:
+        chk.close()
+    if ok != "ok" or n_src != n_dst:
+        dest.unlink(missing_ok=True)
+        raise Fatal(f"резервная копия не прошла проверку ({ok}, треков {n_dst} из {n_src})")
+    log(f"Резервная копия: {dest} ({dest.stat().st_size / 1e6:.0f} МБ, треков {n_dst})")
+    return dest
+
+
+def extend_scope(store, add_roots, flat, log=print):
+    """Добавляет жанры (со всеми поджанрами) в существующий каталог без новых запросов к API.
+
+    Сборщик хранит и треки чужих жанров, поэтому принадлежность пересчитывается по уже известному
+    жанру альбома: альбомы и треки новых жанров становятся «жанровыми», исполнители повышаются по тем же
+    правилам, что и при сборе. Ничего не удаляется и не понижается: прогресс сбора (дискографии, очередь,
+    стартовые точки, лейблы) сохраняется, новые исполнители просто встают в очередь.
+    """
+    bad = [g for g in add_roots if g not in flat]
+    if bad:
+        raise Fatal(f"Неизвестные жанры: {bad}")
+    old = set(json.loads(store.meta("scope") or "[]"))
+    roots = json.loads(store.meta("roots") or "[]")
+    added = set().union(*(genre_family(flat, g) for g in add_roots)) - old
+    if not added:
+        return {"added": [], "message": "эти жанры уже есть в каталоге"}
+    one = store.one
+    before = {"tracks": one("SELECT COUNT(*) FROM tracks WHERE scope=1"),
+              "albums": one("SELECT COUNT(*) FROM albums WHERE scope=1"),
+              "artists": one("SELECT COUNT(*) FROM artists WHERE scope=1"),
+              "playable": one("SELECT COUNT(DISTINCT main_artist_id) FROM tracks WHERE scope=1")}
+    new_scope = sorted(old | added)
+    gj = json.dumps(sorted(added))
+    store.begin()
+    try:
+        x = store.db.execute
+        x("CREATE TEMP TABLE IF NOT EXISTS _add(g TEXT PRIMARY KEY)")
+        x("DELETE FROM _add")
+        x("INSERT INTO _add SELECT value FROM json_each(?)", (gj,))
+        x("UPDATE albums SET scope=1 WHERE scope IS NOT 1 AND genre IN (SELECT g FROM _add)")
+        x("UPDATE tracks SET scope=1 WHERE scope IS NOT 1 AND album_genre IN (SELECT g FROM _add)")
+        linked = ("EXISTS (SELECT 1 FROM track_artists ta JOIN tracks t ON t.id=ta.track_id "
+                  "WHERE ta.artist_id=artists.id AND t.scope=1 AND t.album_genre IN (SELECT g FROM _add))")
+        rules = [
+            # метки жанров исполнителя пересекаются с новыми жанрами
+            "EXISTS (SELECT 1 FROM json_each(artists.genres) j WHERE j.value IN (SELECT g FROM _add))",
+            # основной исполнитель альбома нового жанра (как strong при сборе)
+            "id IN (SELECT main_artist_id FROM albums WHERE scope=1 AND genre IN (SELECT g FROM _add))",
+            # дискография уже собрана и содержит треки новых жанров (как при сборе дискографии)
+            f"disco_status IN ('done','partial') AND {linked}",
+            # жанр исполнителя неизвестен, но он соавтор трека нового жанра (как coartist при сборе)
+            f"(genres IS NULL OR genres='[]') AND {linked}",
+        ]
+        x(f"UPDATE artists SET scope=1 WHERE scope IS NOT 1 AND (({') OR ('.join(rules)}))")
+        x("UPDATE artists SET disco_in_scope=(SELECT COUNT(*) FROM track_artists ta JOIN tracks t ON t.id=ta.track_id "
+          "WHERE ta.artist_id=artists.id AND t.scope=1) WHERE disco_status IN ('done','partial')")
+        store.meta("scope", json.dumps(new_scope))
+        store.meta("roots", json.dumps(roots + [g for g in add_roots if g not in roots]))
+        hist = json.loads(store.meta("scope_history") or "[]")
+        hist.append({"at": now(), "added_roots": add_roots, "added_genres": sorted(added)})
+        store.meta("scope_history", json.dumps(hist, ensure_ascii=False))
+        store.commit()
+    except Exception:
+        store.rollback()
+        raise
+    after = {"tracks": one("SELECT COUNT(*) FROM tracks WHERE scope=1"),
+             "albums": one("SELECT COUNT(*) FROM albums WHERE scope=1"),
+             "artists": one("SELECT COUNT(*) FROM artists WHERE scope=1"),
+             "playable": one("SELECT COUNT(DISTINCT main_artist_id) FROM tracks WHERE scope=1")}
+    res = {"added": sorted(added), "before": before, "after": after,
+           "queue": one("SELECT COUNT(*) FROM artists WHERE scope=1 AND disco_status='pending'")}
+    log(f"Добавлены жанры ({len(added)}): {', '.join(sorted(added))}")
+    log(f"Треков жанра: {before['tracks']} → {after['tracks']}; исполнителей с треками: {before['playable']} → "
+        f"{after['playable']}; кандидатов: {before['artists']} → {after['artists']}; очередь дискографий: {res['queue']}")
+    return res
+
+
+def extend_catalog(path, add_roots, flat, log=print):
+    """Резервная копия → расширение. Каталог не должен собираться в этот момент."""
+    lock = Lock(path)
+    try:
+        store = Store(path)
+        old = set(json.loads(store.meta("scope") or "[]"))
+        store.db.close()
+        known = [g for g in add_roots if g in flat]
+        if known and not set().union(*(genre_family(flat, g) for g in known)) - old:
+            return {"added": [], "message": "эти жанры уже есть в каталоге"}
+        backup = backup_catalog(path, log)
+        store = Store(path)
+        try:
+            res = extend_scope(store, add_roots, flat, log)
+        finally:
+            store.db.close()
+    finally:
+        lock.f.close()
+    res["backup"] = str(backup)
+    return res
+
+
+def cmd_extend(args, log=print):
+    from ym_auth import connect
+    client, _ = connect()
+    flat = {}
+
+    def walk(g, parent):
+        flat[g.id] = parent
+        for sub in g.sub_genres or []:
+            walk(sub, g.id)
+    for g in client.genres():
+        walk(g, None)
+    name = args.catalog
+    if not name:
+        sys.exit("Укажите --catalog")
+    path = CAT_DIR / f"{name}.sqlite"
+    if not path.exists():
+        sys.exit(f"Нет каталога {path}")
+    extend_catalog(path, [g.strip() for g in args.genres.split(",") if g.strip()], flat, log)
+
+
 def cmd_run(args, client=None, log=print):
     store, path = open_store(args)
     lock = Lock(path)
@@ -700,7 +848,7 @@ def cmd_genres(args, log=print):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description="Накопительный сборщик каталога Яндекс Музыки")
-    p.add_argument("command", choices=["run", "status", "export", "genres"])
+    p.add_argument("command", choices=["run", "status", "export", "genres", "extend"])
     p.add_argument("--genres", default="allrock", help="id жанров через запятую (с поджанрами)")
     p.add_argument("--catalog", default=None, help="имя каталога (по умолчанию из жанров)")
     p.add_argument("--max-requests", type=int, default=300)
@@ -712,7 +860,8 @@ def main(argv=None):
     args = p.parse_args(argv)
     import logging
     logging.getLogger("yandex_music").setLevel(logging.ERROR)   # без простыней schema-mismatch
-    {"run": cmd_run, "status": cmd_status, "export": cmd_export, "genres": cmd_genres}[args.command](args)
+    {"run": cmd_run, "status": cmd_status, "export": cmd_export, "genres": cmd_genres,
+     "extend": cmd_extend}[args.command](args)
 
 
 if __name__ == "__main__":

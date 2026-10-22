@@ -8,10 +8,17 @@ export type Track = {
 };
 export type Artist = { id: number; name: string; tracks: number; catalogs: string[] };
 export type Album = { id: number; title: string; year?: number; type?: string; genre?: string; artist_id?: number; artists?: string; tracks: number; cover_track?: string | null };
-export type GenreInfo = { key: string; id: string; title: string; artists: number; tracks: number };
+export type GenreInfo = { key: string; id: string; title: string; parent: string; general: boolean; artists: number; tracks: number };
+export type GenreGroup = { id: string; title: string; keys: string[]; artists: number; tracks: number };
+export type Pool = { artists: number; tracks: number; allowed_artists: number; allowed_tracks: number; blocked_artists: number };
+export type ExtendResult = {
+  added: string[]; message?: string; error?: string; backup?: string; queue?: number;
+  before?: { tracks: number; artists: number; playable: number }; after?: { tracks: number; artists: number; playable: number };
+};
 export type Catalog = {
   name: string; path: string; size_mb: number; roots: string[]; scope: string[]; tracks: number; artists: number;
   discographies: number; queue: number; albums: number; runs: number; genres: GenreInfo[]; error?: string;
+  candidates: number; playable_artists: number; groups: GenreGroup[];
 };
 export type Settings = {
   genres: string[]; volume: number; artist_cooldown: number; track_cooldown_days: number;

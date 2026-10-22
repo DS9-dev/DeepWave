@@ -15,6 +15,7 @@ results/
 results_depth/
 results_play/
 country_probe_*.json
+genre_probe.json
 *.log
 # аудио
 *.mp3

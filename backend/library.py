@@ -63,8 +63,9 @@ class Library:
     def _open(path):
         return sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10)
 
-    def rebuild(self, titles=None):
-        titles = titles or {}
+    def rebuild(self, titles=None, parents=None, order=None):
+        """titles: {жанр: название}; parents: {жанр: родительский жанр или None}; order: порядок корней."""
+        titles, parents, order = titles or {}, parents or {}, order or []
         tracks, by_genre, artists, albums, catalogs = {}, defaultdict(lambda: defaultdict(list)), {}, {}, []
         for path in self.catalog_files():
             name = path.stem
@@ -106,16 +107,32 @@ class Library:
                                                   "genre": genre, "artist_id": aid, "artists": arts, "tracks": []})
                     al["tracks"].append(tid)
             scope = json.loads(meta.get("scope", "[]"))
+            genres = []
+            for g in scope:
+                bucket = by_genre.get(f"{name}:{g}")
+                if not bucket:
+                    continue
+                parent = parents.get(g) or g                 # корневой жанр: сам себе группа
+                title = titles.get(g, g)
+                genres.append({"key": f"{name}:{g}", "id": g, "title": title, "parent": parent,
+                               "general": parent == g,       # альбомы с жанром-корнем без уточнения
+                               "artists": len(bucket), "tracks": sum(len(v) for v in bucket.values())})
+            genres.sort(key=lambda x: (not x["general"], -x["tracks"]))
+            groups = []
+            for parent in sorted({g["parent"] for g in genres},
+                                 key=lambda p: (order.index(p) if p in order else len(order), p)):
+                gs = [g for g in genres if g["parent"] == parent]
+                uniq = set().union(*(by_genre[g["key"]].keys() for g in gs))
+                groups.append({"id": parent, "title": titles.get(parent, parent), "keys": [g["key"] for g in gs],
+                               "artists": len(uniq), "tracks": sum(g["tracks"] for g in gs)})
+            cat_artists = set().union(*(by_genre[g["key"]].keys() for g in genres)) if genres else set()
             catalogs.append({
                 "name": name, "path": str(path), "size_mb": round(path.stat().st_size / 1e6, 1),
                 "roots": json.loads(meta.get("roots", "[]")), "scope": scope,
-                "tracks": len(tracks) - n_before, "artists": stat[0], "discographies": stat[1],
+                "tracks": len(tracks) - n_before, "artists": stat[0], "candidates": stat[0],
+                "playable_artists": len(cat_artists), "discographies": stat[1],
                 "queue": stat[2], "albums": stat[3], "runs": stat[4],
-                "genres": sorted(
-                    [{"key": f"{name}:{g}", "id": g, "title": titles.get(g, g),
-                      "artists": len(by_genre.get(f"{name}:{g}", {})),
-                      "tracks": sum(len(v) for v in by_genre.get(f"{name}:{g}", {}).values())}
-                     for g in scope if by_genre.get(f"{name}:{g}")], key=lambda x: -x["tracks"])})
+                "genres": sorted(genres, key=lambda x: -x["tracks"]), "groups": groups})
         for a in artists.values():
             a["catalogs"] = sorted(a["catalogs"])
             a["_s"] = (a["name"] or "").casefold()
@@ -179,6 +196,14 @@ class Library:
         return [{k: v for k, v in self.artists[i].items() if k != "_s"} for i in self.rng.sample(ids, min(n, len(ids)))]
 
     # ------------------------------------------------------------ справедливый выбор
+    def pool_summary(self, keys, blocked=None):
+        """Сколько уникальных исполнителей и треков реально доступно для выбранных жанров."""
+        full = self.eligible_artists(keys)
+        allowed = [a for a in full if not blocked or a not in blocked]
+        return {"artists": len(full), "tracks": sum(len(v) for v in full.values()),
+                "allowed_artists": len(allowed), "allowed_tracks": sum(len(full[a]) for a in allowed),
+                "blocked_artists": len(full) - len(allowed)}
+
     def eligible_artists(self, keys, blocked=None):
         with self.lock:
             by_genre = self.by_genre

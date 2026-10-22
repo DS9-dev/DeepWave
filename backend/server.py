@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import ym_auth                      # noqa: E402
+import crawler                      # noqa: E402
 from state import State             # noqa: E402
 from library import Library         # noqa: E402
 from audio import Audio, Unavailable  # noqa: E402
@@ -48,6 +49,7 @@ class App:
         self._blocked = None                       # кеш фильтра стран: (ключ настроек, множество)
         self.countries.on_change = self._invalidate_filter
         self._maint_lock = threading.Lock()
+        self._extend_lock = threading.Lock()
         self.rebuild()
         threading.Thread(target=self.connect, daemon=True).start()
         threading.Thread(target=self._refresher, daemon=True).start()
@@ -80,8 +82,22 @@ class App:
         self.state.kv("genre_tree", tree)
         self.rebuild()
 
+    def genre_parents(self):
+        parents, order = {}, []
+        for g in self.state.kv("genre_tree") or []:
+            order.append(g["id"])
+            parents[g["id"]] = None
+
+            def walk(node, root):
+                for sub in node.get("sub") or []:
+                    parents[sub["id"]] = root
+                    walk(sub, root)
+            walk(g, g["id"])
+        return parents, order
+
     def rebuild(self):
-        self.library.rebuild(self.state.kv("genre_titles") or {})
+        parents, order = self.genre_parents()
+        self.library.rebuild(self.state.kv("genre_titles") or {}, parents, order)
         self._invalidate_filter()
         self.auto_countries()
 
@@ -90,7 +106,7 @@ class App:
         и фильтр стран включён. Проверка идёт в фоне, 1 запрос в секунду."""
         try:
             if self.client and self.state.kv("countries_started") and self.state.settings().get("country_mode") != "all":
-                self.countries.start(auto=True)
+                self.countries.start(auto=True, musicbrainz=False)    # MusicBrainz — по кнопке
         except Exception as e:
             log.warning("страны: автозапуск не удался: %s", e)
 
@@ -144,6 +160,29 @@ class App:
         ids = country_blocked(self.library.artists.keys(), self.state.artist_countries(), settings)
         self._blocked = (key, ids)
         return ids
+
+    def extend_catalog(self, b):
+        """Добавить жанры (со всеми поджанрами) в существующий каталог: резервная копия + пересчёт."""
+        name = re.sub(r"[^\w+-]", "_", (b.get("catalog") or "").strip())
+        roots = [g for g in (b.get("genres") or []) if isinstance(g, str) and re.match(r"^[\w-]+$", g)]
+        path = self.cat_dir / f"{name}.sqlite"
+        if not name or not path.exists() or not roots:
+            return {"error": "укажите каталог и жанры"}
+        if self.crawl.info.get("running"):
+            return {"error": "сначала остановите сбор каталога"}
+        parents, _ = self.genre_parents()
+        if not parents:
+            return {"error": "список жанров Яндекса ещё не загружен — войдите в Яндекс"}
+        with self._extend_lock:
+            try:
+                res = crawler.extend_catalog(path, roots, parents, log.info)
+            except SystemExit:
+                return {"error": "этот каталог сейчас собирается в другом окне (crawler.py)"}
+            except crawler.Fatal as e:
+                return {"error": str(e)}
+        self.rebuild()
+        res["catalogs"] = self.library.catalogs
+        return res
 
     def countries_status(self):
         """Один формат ответа для всех запросов о странах (интерфейс рассчитывает на поле filter)."""
@@ -323,6 +362,9 @@ def make_handler(app: App, token: str):
                 ("GET", "/api/crawl"): lambda: app.crawl.status(),
                 ("POST", "/api/crawl/start"): lambda: self._crawl_start(b),
                 ("POST", "/api/crawl/stop"): lambda: (app.crawl.stop(), app.crawl.status())[1],
+                ("POST", "/api/catalog/extend"): lambda: app.extend_catalog(b),
+                ("POST", "/api/pool"): lambda: app.library.pool_summary(
+                    b.get("genres") or [], app.blocked(app.state.settings())),
                 ("POST", "/api/rebuild"): lambda: (app.rebuild(), {"catalogs": app.library.catalogs})[1],
                 ("GET", "/api/countries/names"): lambda: {"names": all_countries()},
                 ("GET", "/api/countries"): lambda: app.countries_status(),
