@@ -145,6 +145,10 @@ class App:
         self._blocked = (key, ids)
         return ids
 
+    def countries_status(self):
+        """Один формат ответа для всех запросов о странах (интерфейс рассчитывает на поле filter)."""
+        return {**self.countries.status(), "filter": self.filter_summary()}
+
     def filter_summary(self, settings=None):
         settings = settings or self.state.settings()
         n = len(self.library.artists)
@@ -321,10 +325,11 @@ def make_handler(app: App, token: str):
                 ("POST", "/api/crawl/stop"): lambda: (app.crawl.stop(), app.crawl.status())[1],
                 ("POST", "/api/rebuild"): lambda: (app.rebuild(), {"catalogs": app.library.catalogs})[1],
                 ("GET", "/api/countries/names"): lambda: {"names": all_countries()},
-                ("GET", "/api/countries"): lambda: {**app.countries.status(), "filter": app.filter_summary()},
-                ("POST", "/api/countries/start"): lambda: app.countries.start(recheck=bool(b.get("recheck")),
-                                                                         musicbrainz=b.get("musicbrainz", True) is not False),
-                ("POST", "/api/countries/stop"): lambda: (app.countries.stop(), app.countries.status())[1],
+                ("GET", "/api/countries"): lambda: app.countries_status(),
+                ("POST", "/api/countries/start"): lambda: (app.countries.start(
+                    recheck=bool(b.get("recheck")), musicbrainz=b.get("musicbrainz", True) is not False),
+                    app.countries_status())[1],
+                ("POST", "/api/countries/stop"): lambda: (app.countries.stop(), app.countries_status())[1],
                 ("POST", "/api/shutdown"): lambda: self._shutdown(),
             }
             fn = routes.get((m, path))

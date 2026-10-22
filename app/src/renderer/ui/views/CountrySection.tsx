@@ -49,9 +49,11 @@ export function CountrySection({ settings, save, online }: { settings: Settings;
   };
   const run = async (body: object) => {
     setBusy(true);
-    try { setC(await api.post<CountryStatus>("/api/countries/start", body)); } finally { setBusy(false); }
+    try { setC(await api.post<CountryStatus>("/api/countries/start", body)); }
+    catch { /* состояние обновит опрос */ }
+    finally { setBusy(false); }
   };
-  const stop = async () => { setC(await api.post<CountryStatus>("/api/countries/stop")); };
+  const stop = () => api.post<CountryStatus>("/api/countries/stop").then(setC).catch(() => {});
 
   const mode = settings.country_mode;
   const st = c?.statuses ?? {};
@@ -91,7 +93,7 @@ export function CountrySection({ settings, save, online }: { settings: Settings;
           <span className="val wide">{settings.country_unknown ? "воспроизводить" : "не воспроизводить"}</span>
           <Toggle checked={settings.country_unknown} onChange={(v) => save({ country_unknown: v })} />
         </Row>
-        {c && <p className={`filter-sum ${c.filter.allowed === 0 ? "warn" : ""}`}>
+        {c?.filter && <p className={`filter-sum ${c.filter.allowed === 0 ? "warn" : ""}`}>
           Проходят фильтр <b>{num(c.filter.allowed)}</b> из {num(c.filter.artists)} исполнителей, исключено {num(c.filter.blocked)}.
           {c.filter.allowed === 0 && " Музыка играть не будет — измените выбор."}
         </p>}
@@ -108,7 +110,7 @@ export function CountrySection({ settings, save, online }: { settings: Settings;
           <p>{c.phase === "musicbrainz" ? "MusicBrainz (не чаще 1 запроса в секунду)" : "Яндекс Музыка"}{c.auto ? " · новые исполнители" : ""}: {num(c.done ?? 0)} / {num(c.todo ?? 0)} · найдено стран: <b>{num(c.found ?? 0)}</b>
             {c.current ? <span className="muted"> · {c.current}</span> : null}</p>
           <div className="bar thin"><div style={{ width: `${pct}%` }} /></div>
-          <p className="muted">Осталось примерно {eta(c.eta_s)}. Можно пользоваться приложением и слушать музыку; остановка ничего не теряет.</p>
+          <p className="muted">Осталось примерно {eta(c.done ? c.eta_s : (c.todo ?? 0) * (c.phase === "musicbrainz" ? MB_S : YA_S))}. Можно пользоваться приложением и слушать музыку; остановка ничего не теряет.</p>
           <button className="btn" onClick={stop}>Остановить</button>
         </div> : <div className="btns">
           {c.pending_yandex > 0 && <button className="btn primary" disabled={busy || !online} onClick={() => run({ musicbrainz: false })}>

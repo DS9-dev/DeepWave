@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { Component, createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { api, backendState, bridge, Catalog, onBackendChange, Settings, Status, WinMode } from "../api";
 import { CompactPlayer } from "./Compact";
 import { player } from "../player";
@@ -85,6 +85,23 @@ function Boot({ error }: { error: string }) {
       </> : <><div className="spinner" /><p className="muted">Запуск…</p></>}
     </div>
   );
+}
+
+/** Ошибка отрисовки раздела показывается сообщением вместо пустого окна; плеер продолжает работать. */
+class ViewBoundary extends Component<{ children: ReactNode }, { error: string }> {
+  state = { error: "" };
+  static getDerivedStateFromError(e: unknown) { return { error: String((e as Error)?.message || e) }; }
+  componentDidCatch(e: unknown) { console.error("view error", e); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="card view-error">
+        <h2>Раздел не удалось показать</h2>
+        <p className="muted">{this.state.error}</p>
+        <button className="btn" onClick={() => this.setState({ error: "" })}>Попробовать снова</button>
+      </div>
+    );
+  }
 }
 
 export function App() {
@@ -187,7 +204,7 @@ export function App() {
           <Sidebar />
           <main className="content">
             {needAuth && route.view !== "settings" ? <SignIn /> : (
-              <div className="view" key={`${route.view}:${route.id ?? ""}`}>
+              <ViewBoundary key={`${route.view}:${route.id ?? ""}`}><div className="view">
                 {route.view === "listen" && <ListenView />}
                 {route.view === "library" && <LibraryView />}
                 {route.view === "artist" && route.id !== undefined && <ArtistView id={route.id} />}
@@ -195,7 +212,7 @@ export function App() {
                 {route.view === "history" && <HistoryView />}
                 {route.view === "catalog" && <CatalogView />}
                 {route.view === "settings" && <SettingsView />}
-              </div>
+              </div></ViewBoundary>
             )}
           </main>
         </div>

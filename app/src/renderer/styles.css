@@ -334,3 +334,4 @@ html[data-mode="compact"] body { background: var(--surface); }
 .country-box .btns { display: flex; gap: 8px; flex-wrap: wrap; }
 .country-run { margin: 0; width: 100%; box-sizing: border-box; background: var(--surface); display: grid; gap: 6px; justify-items: start; }
 .country-run .bar { width: 100%; margin: 0; }
+.view-error { display: grid; gap: 10px; justify-items: start; margin: 24px; }
