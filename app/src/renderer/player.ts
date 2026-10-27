@@ -29,6 +29,9 @@ class Player {
   private forward: Track[] = [];
   private gen = 0;
   private upcomingFor = -1;
+  /** Письменности названий, исключённые из случайного выбора (Настройки). Проверяется и здесь, чтобы уже
+   *  подготовленный трек не успел зазвучать до ответа сервиса на смену настроек. */
+  private excludedScripts = new Set<string>();
   private upcomingReady = false;
   private playId: number | null = null;
   private listened = 0;
@@ -136,7 +139,8 @@ class Player {
 
   private async advance(): Promise<void> {
     const gen = ++this.gen;
-    if (this.upcomingReady && this.state.upcoming && this.upcomingFor === gen - 1) {
+    if (this.upcomingReady && this.state.upcoming && this.upcomingFor === gen - 1 &&
+        (this.mode.kind !== "radio" || this.allowedRandom(this.state.upcoming))) {
       const t = this.state.upcoming;
       this.swapToIdle();
       return this.startOn(t, gen, true);
@@ -192,6 +196,12 @@ class Player {
     this.prepareUpcoming(gen);
   }
 
+  setScriptFilter(ids: string[]) { this.excludedScripts = new Set(ids); }
+
+  private allowedRandom(t: Track | null | undefined): boolean {
+    return !t || !this.excludedScripts.size || !(t.scripts ?? []).some((s) => this.excludedScripts.has(s));
+  }
+
   /** Настройки отбора изменились (например, фильтр стран): заранее выбранный случайный трек выбрать заново. */
   refreshUpcoming() {
     if (this.mode.kind !== "radio" || this.forward.length || !this.state.current) return;
@@ -238,6 +248,8 @@ class Player {
 
   private async tryUpcoming(gen: number): Promise<{ track: Track } | { fatal: string } | { retry: string }> {
     try {
+      // в случайном режиме трек «вперёд по истории» с исключённой письменностью пропускается
+      while (this.mode.kind === "radio" && this.forward.length && !this.allowedRandom(this.forward[this.forward.length - 1])) this.forward.pop();
       if (this.forward.length) {
         const f = this.forward[this.forward.length - 1];
         const t = f.stream ? f : await api.get<Track>(`/api/track/${f.id}`);
@@ -259,9 +271,15 @@ class Player {
         this.set({ modeLabel: "Случайная подборка" });
       }
       const exclude = [this.state.current?.id, ...this.state.session.slice(0, 30).map((s) => s.id)].filter(Boolean);
-      const t = await api.post<Track & { retry?: boolean }>("/api/next", {
+      let t = await api.post<Track & { retry?: boolean }>("/api/next", {
         genres: this.mode.genres, exclude, exclude_artists: this.state.current?.artist_id ? [this.state.current.artist_id] : [],
       });
+      // ответ на запрос, отправленный до смены фильтра письменности, — выбрать заново
+      for (let i = 0; i < 4 && !t.error && !this.allowedRandom(t); i++) {
+        if (gen !== this.gen) return { retry: "" };
+        t = await api.post<Track & { retry?: boolean }>("/api/next", { genres: this.mode.genres, exclude: [...exclude, t.id] });
+      }
+      if (!t.error && !this.allowedRandom(t)) return { retry: "" };
       if (!t.error) return { track: t };
       if (t.error === "auth") return { fatal: "Войдите в Яндекс, чтобы слушать" };
       return t.retry ? { retry: t.error } : { fatal: t.error };

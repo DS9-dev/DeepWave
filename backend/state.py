@@ -21,6 +21,7 @@ DEFAULTS = {
     "country_mode": "all",        # all | include | exclude
     "country_list": [],           # ISO-коды стран (как в MusicBrainz): ["RU", "SU", ...]
     "country_unknown": True,      # пропускать исполнителей с неизвестной страной (в режимах include/exclude)
+    "title_scripts_excluded": [],  # письменности названий треков, исключённые из случайного выбора (scripts.IDS)
     "artist_cooldown": 150,       # сколько последних исполнителей не повторять
     "track_cooldown_days": 30,    # трек не повторяется N дней
     "theme": "auto",
@@ -126,6 +127,11 @@ class State:
                     v = sorted({str(c).strip().upper() for c in v if 2 <= len(str(c).strip()) <= 3})
                 if k == "country_unknown":
                     v = bool(v)
+                if k == "title_scripts_excluded":
+                    if not isinstance(v, list):
+                        continue
+                    from scripts import IDS
+                    v = [sid for sid in IDS if sid in set(v)]
                 if k in DEFAULTS:
                     self.db.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (k, json.dumps(v)))
         return self.settings()

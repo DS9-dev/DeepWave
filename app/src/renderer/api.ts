@@ -5,12 +5,14 @@ export type Track = {
   id: string; title: string; version?: string | null; artists: string; artist_id: number | null;
   album_id: number | null; album?: string | null; year?: number | null; genre?: string; duration_ms?: number | null;
   catalog?: string; cover?: string | null; stream?: string; codec?: string; bitrate?: number; error?: string;
+  scripts?: string[];
 };
 export type Artist = { id: number; name: string; tracks: number; catalogs: string[] };
 export type Album = { id: number; title: string; year?: number; type?: string; genre?: string; artist_id?: number; artists?: string; tracks: number; cover_track?: string | null };
 export type GenreInfo = { key: string; id: string; title: string; parent: string; general: boolean; artists: number; tracks: number };
 export type GenreGroup = { id: string; title: string; keys: string[]; artists: number; tracks: number };
-export type Pool = { artists: number; tracks: number; allowed_artists: number; allowed_tracks: number; blocked_artists: number };
+export type Pool = { artists: number; tracks: number; allowed_artists: number; allowed_tracks: number; blocked_artists: number;
+  script_excluded_tracks: number; script_excluded_artists: number };
 export type ExtendResult = {
   added: string[]; message?: string; error?: string; backup?: string; queue?: number;
   before?: { tracks: number; artists: number; playable: number }; after?: { tracks: number; artists: number; playable: number };
@@ -24,7 +26,9 @@ export type Settings = {
   genres: string[]; volume: number; artist_cooldown: number; track_cooldown_days: number;
   theme: "auto" | "light" | "dark"; history_months: number;
   country_mode: "all" | "include" | "exclude"; country_list: string[]; country_unknown: boolean;
+  title_scripts_excluded: string[];
 };
+export type ScriptInfo = { id: string; title: string; sample: string };
 export type CountryStatus = {
   running: boolean; phase?: "yandex" | "musicbrainz"; auto?: boolean; done?: number; todo?: number; found?: number;
   found_yandex?: number; found_mb?: number; errors?: number; eta_s?: number; current?: string | null; message?: string | null;

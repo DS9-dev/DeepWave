@@ -48,7 +48,8 @@ function GenrePicker() {
     let alive = true;
     api.post<Pool>("/api/pool", { genres: chosen }).then((r) => alive && setPool(r)).catch(() => {});
     return () => { alive = false; };
-  }, [chosen.join("|"), catalogs, cmode, (settings?.country_list ?? []).join(","), settings?.country_unknown]);
+  }, [chosen.join("|"), catalogs, cmode, (settings?.country_list ?? []).join(","), settings?.country_unknown,
+      (settings?.title_scripts_excluded ?? []).join(",")]);
   const save = (s: Set<string>) => saveSettings({ genres: [...s] });
   const toggle = (k: string) => { const s = new Set(sel); if (s.has(k)) s.delete(k); else s.add(k); save(s); };
   const toggleGroup = (keys: string[]) => {
@@ -67,14 +68,15 @@ function GenrePicker() {
           <h2>Жанры</h2>
           <p className="muted">{chosen.length ? `Выбрано жанров: ${chosen.length}` : "Не выбрано — звучат все жанры"}
             {pool && <> · <b>{num(pool.allowed_artists)}</b> {plural(pool.allowed_artists, "исполнитель", "исполнителя", "исполнителей")}, {num(pool.allowed_tracks)} {plural(pool.allowed_tracks, "трек", "трека", "треков")}</>}
-            {filtered && <span title="Активен фильтр стран (Настройки → «Страны исполнителей»)"> · без {num(pool!.blocked_artists)} по фильтру стран</span>}</p>
+            {filtered && <span title="Активен фильтр стран (Настройки → «Страны исполнителей»)"> · без {num(pool!.blocked_artists)} по фильтру стран</span>}
+            {pool && pool.script_excluded_tracks > 0 && <span title="Настройки → «Письменность названий треков»"> · без {num(pool.script_excluded_tracks)} {plural(pool.script_excluded_tracks, "трека", "треков", "треков")} по письменности</span>}</p>
         </div>
         <div className="row gap">
           {chosen.length > 0 && <button className="btn ghost" onClick={() => saveSettings({ genres: [] })}>Сбросить</button>}
           <button className="btn primary" onClick={start} disabled={st.starting || (pool !== null && pool.allowed_artists === 0)}><IShuffle size={16} />{st.current ? "Новая подборка" : "Слушать подборку"}</button>
         </div>
       </div>
-      {pool && pool.allowed_artists === 0 && pool.artists > 0 && <div className="note">Фильтр стран исключил всех исполнителей выбранных жанров — измените его в настройках.</div>}
+      {pool && pool.allowed_artists === 0 && pool.artists > 0 && <div className="note">Фильтры стран и письменности исключили всех исполнителей выбранных жанров — измените их в настройках.</div>}
       {catalogs.map((c) => (
         <div key={c.name} className="genre-catalog">
           {catalogs.length > 1 && <div className="group-label">{c.name}</div>}

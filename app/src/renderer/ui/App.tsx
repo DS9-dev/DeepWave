@@ -128,7 +128,7 @@ export function App() {
       setStatus(s); setCatalogs(c.catalogs);
       if (!settings) {
         const st = await api.get<Settings>("/api/settings");
-        setSettings(st); player.setVolume(st.volume);
+        setSettings(st); player.setVolume(st.volume); player.setScriptFilter(st.title_scripts_excluded ?? []);
       }
     } catch { /* сервис ещё запускается */ }
   }, [settings]);
@@ -152,9 +152,11 @@ export function App() {
   }, [pst.volume]);
 
   const saveSettings = useCallback(async (p: Partial<Settings>) => {
+    if (p.title_scripts_excluded) { player.setScriptFilter(p.title_scripts_excluded); player.refreshUpcoming(); }  // сразу, до ответа сервиса
     const s = await api.post<Settings>("/api/settings", p);
     setSettings(s);
-    if (Object.keys(p).some((k) => k.startsWith("country"))) player.refreshUpcoming();   // заранее выбранный трек — по новому фильтру
+    player.setScriptFilter(s.title_scripts_excluded ?? []);
+    if (Object.keys(p).some((k) => k.startsWith("country") || k === "title_scripts_excluded")) player.refreshUpcoming();   // заранее выбранный трек — по новому фильтру
   }, []);
 
   const titles = useMemo(() => {

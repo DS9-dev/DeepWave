@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import ym_auth                      # noqa: E402
 import crawler                      # noqa: E402
+import scripts                      # noqa: E402
 from state import State             # noqa: E402
 from library import Library         # noqa: E402
 from audio import Audio, Unavailable  # noqa: E402
@@ -184,6 +185,11 @@ class App:
         res["catalogs"] = self.library.catalogs
         return res
 
+    def pool(self, keys):
+        settings = self.state.settings()
+        return self.library.pool_summary(keys, self.blocked(settings),
+                                         scripts.exclusion_mask(settings.get("title_scripts_excluded")))
+
     def countries_status(self):
         """Один формат ответа для всех запросов о странах (интерфейс рассчитывает на поле filter)."""
         return {**self.countries.status(), "filter": self.filter_summary()}
@@ -204,14 +210,19 @@ class App:
         keys = body.get("genres") or settings.get("genres") or []
         exclude = set(map(str, body.get("exclude") or []))
         blocked = self.blocked(settings)
+        smask = scripts.exclusion_mask(settings.get("title_scripts_excluded"))
         last_err = None
         for _ in range(8):
-            rec = self.library.pick(keys, self.state, settings, blocked, exclude, body.get("exclude_artists") or [])
+            rec = self.library.pick(keys, self.state, settings, blocked, exclude, body.get("exclude_artists") or [],
+                                    script_mask=smask)
             if rec is None:
-                if blocked and self.library.eligible_artists(keys):
-                    return {"error": "фильтр стран исключил всех исполнителей выбранных жанров — измените его в настройках",
-                            "filter": True}
-                return {"error": "в выбранных жанрах нет треков"}
+                if not self.library.eligible_artists(keys):
+                    return {"error": "в выбранных жанрах нет треков"}
+                if smask and not self.library.eligible_artists(keys, None, smask):
+                    return {"error": "фильтр письменности названий исключил все треки выбранных жанров — "
+                                     "измените его в настройках", "filter": True}
+                return {"error": "фильтры стран и письменности исключили всех исполнителей выбранных жанров — "
+                                 "измените их в настройках", "filter": True}
             try:
                 return self.prepare(rec)
             except Unavailable as e:
@@ -363,8 +374,8 @@ def make_handler(app: App, token: str):
                 ("POST", "/api/crawl/start"): lambda: self._crawl_start(b),
                 ("POST", "/api/crawl/stop"): lambda: (app.crawl.stop(), app.crawl.status())[1],
                 ("POST", "/api/catalog/extend"): lambda: app.extend_catalog(b),
-                ("POST", "/api/pool"): lambda: app.library.pool_summary(
-                    b.get("genres") or [], app.blocked(app.state.settings())),
+                ("POST", "/api/pool"): lambda: app.pool(b.get("genres") or []),
+                ("GET", "/api/scripts"): lambda: {"scripts": scripts.catalog(), **app.library.script_counts()},
                 ("POST", "/api/rebuild"): lambda: (app.rebuild(), {"catalogs": app.library.catalogs})[1],
                 ("GET", "/api/countries/names"): lambda: {"names": all_countries()},
                 ("GET", "/api/countries"): lambda: app.countries_status(),

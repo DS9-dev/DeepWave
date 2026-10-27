@@ -11,6 +11,8 @@ import sqlite3
 import threading
 import time
 from collections import defaultdict
+
+import scripts
 from pathlib import Path
 
 SKIP_FILES = {"app_state"}
@@ -54,6 +56,7 @@ class Library:
         self.tracks, self.by_genre, self.artists, self.albums, self.catalogs = {}, {}, {}, {}, []
         self.built_at = 0
         self.rng = random.Random()
+        self._pool_cache = {}
 
     # ------------------------------------------------------------ индекс
     def catalog_files(self):
@@ -94,6 +97,7 @@ class Library:
                 rec = {"id": tid, "title": title, "version": ver, "artists": arts, "artist_id": aid,
                        "album_id": alid, "album": altitle, "year": year, "album_type": altype,
                        "genre": genre, "duration_ms": dur, "catalog": name, "title_norm": norm_title(title),
+                       "_sm": scripts.mask(f"{title or ''} {ver or ''}"),
                        "_s": f"{title} {ver or ''} {arts} {altitle or ''}".casefold()}
                 tracks[tid] = rec
                 by_genre[key][aid].append(tid)
@@ -145,7 +149,23 @@ class Library:
     # ------------------------------------------------------------ данные для UI
     def public(self, tid):
         t = self.tracks.get(str(tid))
-        return {k: v for k, v in t.items() if not k.startswith("_")} if t else None
+        if not t:
+            return None
+        out = {k: v for k, v in t.items() if not k.startswith("_")}
+        out["scripts"] = scripts.names(t["_sm"])
+        return out
+
+    def script_counts(self):
+        """Сколько треков каталога содержат буквы каждой письменности."""
+        with self.lock:
+            tracks = self.tracks
+        counts = defaultdict(int)
+        for t in tracks.values():
+            m = t["_sm"]
+            if m:
+                for sid in scripts.names(m):
+                    counts[sid] += 1
+        return {"total": len(tracks), "counts": dict(counts)}
 
     def search(self, q, limit=60):
         q = (q or "").casefold().strip()
@@ -196,28 +216,46 @@ class Library:
         return [{k: v for k, v in self.artists[i].items() if k != "_s"} for i in self.rng.sample(ids, min(n, len(ids)))]
 
     # ------------------------------------------------------------ справедливый выбор
-    def pool_summary(self, keys, blocked=None):
-        """Сколько уникальных исполнителей и треков реально доступно для выбранных жанров."""
+    def pool_summary(self, keys, blocked=None, script_mask=0):
+        """Сколько уникальных исполнителей и треков реально доступно для выбранных жанров с учётом фильтров."""
         full = self.eligible_artists(keys)
-        allowed = [a for a in full if not blocked or a not in blocked]
-        return {"artists": len(full), "tracks": sum(len(v) for v in full.values()),
-                "allowed_artists": len(allowed), "allowed_tracks": sum(len(full[a]) for a in allowed),
-                "blocked_artists": len(full) - len(allowed)}
+        ok = self.eligible_artists(keys, blocked, script_mask)
+        by_script = self.eligible_artists(keys, None, script_mask) if script_mask else full
+        n = lambda pool: sum(len(v) for v in pool.values())
+        return {"artists": len(full), "tracks": n(full),
+                "allowed_artists": len(ok), "allowed_tracks": n(ok),
+                "blocked_artists": len([a for a in full if blocked and a in blocked]),
+                "script_excluded_tracks": n(full) - n(by_script),
+                "script_excluded_artists": len(full) - len(by_script)}
 
-    def eligible_artists(self, keys, blocked=None):
+    def eligible_artists(self, keys, blocked=None, script_mask=0):
+        """{исполнитель: [треки]} для выбранных жанров. Исполнители из исключённых стран и треки с буквами
+        исключённых письменностей отбрасываются; исполнитель без подходящих треков в пул не попадает."""
         with self.lock:
-            by_genre = self.by_genre
+            by_genre, tracks = self.by_genre, self.tracks
         keys = [k for k in keys if k in by_genre] or list(by_genre)
+        ck = (tuple(sorted(keys)), hash(frozenset(blocked)) if blocked else 0, script_mask, id(by_genre))
+        hit = self._pool_cache.get(ck)
+        if hit is not None:
+            return hit
         pool = defaultdict(list)
         for k in keys:
             for aid, tids in by_genre[k].items():
                 if blocked and aid in blocked:
                     continue
+                if script_mask:
+                    tids = [t for t in tids if not tracks[t]["_sm"] & script_mask]
+                    if not tids:
+                        continue
                 pool[aid].extend(tids)
+        pool = dict(pool)
+        if len(self._pool_cache) > 8:
+            self._pool_cache.clear()
+        self._pool_cache[ck] = pool                   # только для чтения: pick() пул не изменяет
         return pool
 
-    def pick(self, keys, state, settings, blocked=None, exclude_tracks=(), exclude_artists=()):
-        pool = self.eligible_artists(keys, blocked)
+    def pick(self, keys, state, settings, blocked=None, exclude_tracks=(), exclude_artists=(), script_mask=0):
+        pool = self.eligible_artists(keys, blocked, script_mask)
         if not pool:
             return None
         cooldown = min(int(settings.get("artist_cooldown", 150)), max(0, len(pool) // 3))

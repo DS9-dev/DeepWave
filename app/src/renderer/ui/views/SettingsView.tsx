@@ -3,6 +3,7 @@ import { api, bridge, CacheInfo, num, Storage } from "../../api";
 import { useApp } from "../App";
 import { Segmented } from "../common";
 import { CountrySection } from "./CountrySection";
+import { ScriptSection } from "./ScriptSection";
 
 function Row({ title, hint, children }: { title: string; hint?: React.ReactNode; children: React.ReactNode }) {
   return <div className="setting"><div><div className="setting-title">{title}</div>{hint && <div className="setting-hint">{hint}</div>}</div><div className="setting-ctl">{children}</div></div>;
@@ -75,6 +76,8 @@ export function SettingsView() {
 
       <CountrySection settings={settings} save={saveSettings} online={status?.auth === "ok"} />
 
+      <ScriptSection settings={settings} save={saveSettings} />
+
       <section className="card">
         <h2>Оформление</h2>
         <Row title="Тема"><Segmented value={settings.theme} onChange={(v) => saveSettings({ theme: v })} options={[["auto", "Как в системе"], ["light", "Светлая"], ["dark", "Тёмная"]]} /></Row>
@@ -91,7 +94,7 @@ export function SettingsView() {
 
       <section className="card">
         <h2>О приложении</h2>
-        <Row title="DeepWave 1.3" hint={<>Неофициальный клиент Яндекс Музыки · папка проекта: {status?.root}<br />Python {status?.python}</>}>
+        <Row title="DeepWave 1.4" hint={<>Неофициальный клиент Яндекс Музыки · папка проекта: {status?.root}<br />Python {status?.python}</>}>
           {bridge && <button className="btn ghost" onClick={() => bridge!.showLog()}>Журнал сервиса</button>}
         </Row>
       </section>

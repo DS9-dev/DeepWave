@@ -354,3 +354,14 @@ html[data-mode="compact"] body { background: var(--surface); }
 .extend-box { margin-top: 14px; padding: 14px; border-radius: 12px; background: var(--surface-2); display: grid; gap: 12px; }
 .extend-box p { margin: 0; font-size: 13px; }
 .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; word-break: break-all; }
+
+/* письменность названий */
+.script-hint { margin: 2px 0 12px; max-width: none; }
+.script-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 2px 12px; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.script-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.script-item:hover { background: var(--surface-3); }
+.script-item.on { color: var(--accent); font-weight: 560; }
+.script-item input { accent-color: var(--accent); margin: 0; }
+.script-item .sn { flex: 1; min-width: 0; }
+.script-item .ss { color: var(--muted); font-size: 13px; }
+.script-item .sc { width: 64px; text-align: right; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
